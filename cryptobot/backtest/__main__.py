@@ -18,6 +18,8 @@ async def main() -> None:
     ap.add_argument("--end", help="конец периода, например 2022-12-31")
     ap.add_argument("--weights", help="свои веса факторов, например trend=40,momentum=30,volume=30 "
                     "(не указанные факторы получают вес 0)")
+    ap.add_argument("--btc-filter", type=int, metavar="N",
+                    help="торговать, только когда BTC выше своей N-дневной средней (например 200)")
     ap.add_argument("--details", action="store_true", help="подробный отчёт по каждой монете")
     args = ap.parse_args()
     weights = WEIGHTS
@@ -28,11 +30,12 @@ async def main() -> None:
         print("Веса:", ", ".join(f"{k}={v:g}" for k, v in weights.items()))
 
     fg = await data.fear_greed_history()
+    regime = engine.btc_regime(await data.candles("BTC"), args.btc_filter) if args.btc_filter else None
     reports = []
     for sym in args.symbols:
         try:
             candles = await data.candles(sym)
-            r = await asyncio.to_thread(engine.run, sym.upper(), candles, fg, args.buy, args.sell, args.fee, args.start, weights, args.end)
+            r = await asyncio.to_thread(engine.run, sym.upper(), candles, fg, args.buy, args.sell, args.fee, args.start, weights, args.end, regime)
         except Exception as e:
             print(f"{sym}: пропущено — {e}")
             continue
@@ -41,6 +44,8 @@ async def main() -> None:
             print(report.coin_report(r, args.buy, args.sell), "\n" + "-" * 60)
     if reports:
         print(report.summary_report(reports, args.buy, args.sell))
+        if regime is not None:
+            print("\n" + report.variants_report(reports, args.btc_filter))
 
 
 asyncio.run(main())

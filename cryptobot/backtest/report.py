@@ -97,3 +97,25 @@ def summary_report(reports: list[CoinReport], buy: float, sell: float) -> str:
     lines += ["", "Что было после сигнала (все монеты вместе):", *signals_table(buckets, baseline),
               "", "Предсказательная сила факторов (корреляция с доходностью за 7 дней):", *ic_table(ic)]
     return "\n".join(lines)
+
+
+def variants_report(reports: list[CoinReport], period: int) -> str:
+    """Сравнение удержания, сигналов, сигналов с фильтром BTC и одного фильтра."""
+    names = list(reports[0].variants)
+    head = f"{'Монета':<7}" + "".join(f"{n:>14}" for n in names)
+    lines = [f"Фильтр рынка: BTC выше своей {period}-дневной средней", ""]
+    for title, fmt in (("Шарп", lambda v: f"{v.sharpe:.2f}"),
+                       ("Доходность в год", lambda v: _p(v.cagr, 0)),
+                       ("Макс. просадка", lambda v: _p(v.max_drawdown, 0))):
+        lines += [title + ":", head]
+        for r in reports:
+            lines.append(f"{r.symbol:<7}" + "".join(f"{fmt(r.variants[n]):>14}" for n in names))
+        avg = {n: sum(r.variants[n].sharpe for r in reports) / len(reports) for n in names}
+        if title == "Шарп":
+            lines.append(f"{'Среднее':<7}" + "".join(f"{avg[n]:>14.2f}" for n in names))
+        lines.append("")
+    best = {n: sum(max(r.variants, key=lambda k: r.variants[k].sharpe) == n for r in reports) for n in names}
+    lines.append("Лучший Шарп: " + ", ".join(f"{n} — {c}" for n, c in best.items()))
+    exp = sum(r.variants["Сигн.+фильтр"].exposure for r in reports) / len(reports)
+    lines.append(f"Сигналы с фильтром в рынке в среднем {_share(exp)} времени")
+    return "\n".join(lines)

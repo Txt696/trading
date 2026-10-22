@@ -34,3 +34,15 @@ def test_signal_uses_only_past_data():
     candles[-1]["close"] = 1.0  # меняем будущее — прошлые оценки не должны измениться
     after = engine.score_history(candles, {})
     assert [d.score for d in before[:-1]] == [d.score for d in after[:-1]]
+
+
+def test_btc_regime_uses_trailing_average():
+    candles = [{"date": f"d{i}", "close": c} for i, c in enumerate([10, 10, 10, 13, 7])]
+    assert engine.btc_regime(candles, period=3) == {"d2": False, "d3": True, "d4": False}
+
+
+def test_filter_blocks_entry_and_forces_exit():
+    days = _days([100, 110, 120, 130], [50] * 4)
+    s = engine.simulate(days, fee=0, allowed=[False, True, False, True])
+    # Вход только на дне 1, принудительный выход на дне 2: заработали 110 -> 120.
+    assert s.trades == 1 and s.total_return == pytest.approx(120 / 110 - 1)

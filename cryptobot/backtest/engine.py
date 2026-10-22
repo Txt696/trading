@@ -46,6 +46,7 @@ class CoinReport:
     factor_ic: dict[str, float]    # корреляция фактора с доходностью за 7 дней
     strategy: StrategyResult
     buy_hold: StrategyResult
+    variants: dict[str, StrategyResult] = field(default_factory=dict)
 
 
 def score_history(candles: list[dict], fg_history: dict[str, dict], weights: dict = WEIGHTS) -> list[Day]:
@@ -129,19 +130,22 @@ def _stats(equity: list[float], daily: list[float], trades: list[float], exposur
     )
 
 
-def simulate(days: list[Day], buy: float = 15, sell: float = -15, fee: float = 0.001) -> StrategyResult:
+def simulate(days: list[Day], buy: float = 15, sell: float = -15, fee: float = 0.001,
+             allowed: list[bool] | None = None) -> StrategyResult:
     """Только покупки (без шортов): входим, когда оценка >= buy, выходим, когда <= sell.
 
     Решение принимается на закрытии дня t по сигналу дня t, доходность — с t до t+1.
     Комиссия fee списывается при каждом входе и выходе.
+    allowed — фильтр рынка: в дни с False новых входов нет, а открытая позиция закрывается.
     """
     equity, daily, trades = [1.0], [], []
     in_pos, entry_eq, held = False, 1.0, 0
     for t in range(len(days) - 1):
         r = 0.0
-        if not in_pos and days[t].score >= buy:
+        ok = allowed is None or allowed[t]
+        if not in_pos and ok and days[t].score >= buy:
             in_pos, r, entry_eq = True, -fee, equity[-1]
-        elif in_pos and days[t].score <= sell:
+        elif in_pos and (days[t].score <= sell or not ok):
             in_pos, r = False, -fee
             trades.append(equity[-1] * (1 - fee) / entry_eq - 1)
         if in_pos:
@@ -165,13 +169,41 @@ def buy_and_hold(days: list[Day], fee: float = 0.001) -> StrategyResult:
     return _stats(equity, daily, [equity[-1] - 1], 1.0)
 
 
+def btc_regime(btc_candles: list[dict], period: int = 200) -> dict[str, bool]:
+    """Для каждой даты: закрылся ли BTC выше своей SMA(period) — по данным на эту дату."""
+    closes = [c["close"] for c in btc_candles]
+    result, total = {}, 0.0
+    for t, c in enumerate(btc_candles):
+        total += closes[t]
+        if t >= period:
+            total -= closes[t - period]
+        if t >= period - 1:
+            result[c["date"]] = closes[t] > total / period
+    return result
+
+
 def run(symbol: str, candles: list[dict], fg_history: dict, buy: float = 15, sell: float = -15,
-        fee: float = 0.001, start: str | None = None, weights: dict = WEIGHTS, end: str | None = None) -> CoinReport:
+        fee: float = 0.001, start: str | None = None, weights: dict = WEIGHTS, end: str | None = None,
+        regime: dict[str, bool] | None = None) -> CoinReport:
     days = score_history(candles, fg_history, weights)
     days = [d for d in days if (not start or d.date >= start) and (not end or d.date <= end)]
+    if regime is not None:  # сравниваем только на датах, где фильтр уже определён
+        days = [d for d in days if d.date in regime]
     if len(days) < 60:
         raise ValueError(f"{symbol}: слишком короткая история ({len(days)} дн.)")
     buckets, baseline = signal_quality(days)
+    plain, bh = simulate(days, buy, sell, fee), buy_and_hold(days, fee)
+    strategy, variants = plain, {}
+    if regime is not None:
+        allowed = [regime[d.date] for d in days]
+        strategy = simulate(days, buy, sell, fee, allowed)
+        always = [Day(d.date, d.close, 100.0, {}) for d in days]
+        variants = {
+            "Держать": bh,
+            "Сигналы": plain,
+            "Сигн.+фильтр": strategy,
+            "Только фильтр": simulate(always, buy, sell, fee, allowed),
+        }
     return CoinReport(
         symbol=symbol,
         start=days[0].date,
@@ -180,6 +212,7 @@ def run(symbol: str, candles: list[dict], fg_history: dict, buy: float = 15, sel
         buckets=buckets,
         baseline=baseline,
         factor_ic=factor_ic(days),
-        strategy=simulate(days, buy, sell, fee),
-        buy_hold=buy_and_hold(days, fee),
+        strategy=strategy,
+        buy_hold=bh,
+        variants=variants,
     )
