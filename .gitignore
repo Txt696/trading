@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+subscribers.json
+.pytest_cache/
