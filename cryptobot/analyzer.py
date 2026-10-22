@@ -149,12 +149,24 @@ def sentiment_signal(fg: dict | None) -> Signal | None:
     return Signal("sentiment", score, f"индекс страха и жадности: {v} ({fg['label']})")
 
 
-def combine(signals: list[Signal]) -> float:
+def market_signals(prices: list[float], volumes: list[float], fg: dict | None) -> list[Signal]:
+    """Все факторы, кроме новостей. Используется и ботом, и бэктестом."""
+    return [s for s in (
+        trend_signal(prices),
+        momentum_signal(prices),
+        rsi_signal(prices),
+        bollinger_signal(prices),
+        volume_signal(prices, volumes),
+        sentiment_signal(fg),
+    ) if s is not None]
+
+
+def combine(signals: list[Signal], weights: dict[str, float] = WEIGHTS) -> float:
     used = [s for s in signals if s is not None]
-    total_w = sum(WEIGHTS[s.name] for s in used)
+    total_w = sum(weights.get(s.name, 0) for s in used)
     if not total_w:
         return 0.0
-    return sum(_clamp(s.score) * WEIGHTS[s.name] for s in used) / total_w * 100
+    return sum(_clamp(s.score) * weights.get(s.name, 0) for s in used) / total_w * 100
 
 
 def verdict(score: float) -> str:
@@ -193,15 +205,8 @@ async def analyze(coin_id: str, market: dict | None = None) -> Analysis:
     prices[-1] = m["current_price"]  # самая свежая цена
 
     cn = await news.coin_news(m["name"], m["symbol"])
-    signals = [s for s in (
-        trend_signal(prices),
-        momentum_signal(prices),
-        rsi_signal(prices),
-        bollinger_signal(prices),
-        volume_signal(prices, volumes),
-        news_signal(cn),
-        sentiment_signal(fg),
-    ) if s is not None]
+    signals = market_signals(prices, volumes, fg)
+    signals.insert(5, news_signal(cn))
     score = combine(signals)
 
     vol = ind.volatility(prices) or 0

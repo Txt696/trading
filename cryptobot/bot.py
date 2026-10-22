@@ -1,3 +1,4 @@
+import asyncio
 import datetime as dt
 import json
 import logging
@@ -9,6 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import ai, config
 from .analyzer import analyze, analyze_many
+from .backtest import data as bt_data, engine as bt_engine, report as bt_report
 from .formatting import DISCLAIMER, full_report, market_brief, pct, price, ranking
 from .sources import coingecko, fear_greed, news
 
@@ -24,6 +26,7 @@ HELP = (
     "/market — общее состояние рынка\n"
     "/trending — что сейчас в тренде\n"
     "/news — ИИ-сводка и свежие заголовки\n"
+    "/backtest <code>BTC</code> — как сигналы бота сработали бы в прошлом\n"
     "/subscribe — ежедневная сводка\n"
     "/unsubscribe — отписаться\n"
     + DISCLAIMER
@@ -125,6 +128,25 @@ async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await reply(update, "\n\n".join(parts))
 
 
+async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    symbol = (context.args[0] if context.args else "BTC").upper()
+    await reply(update, f"Считаю бэктест {escape(symbol)} на всей доступной истории, это займёт до минуты…")
+    await update.effective_message.chat.send_action("typing")
+    try:
+        candles = await bt_data.candles(symbol)
+        fg = await bt_data.fear_greed_history()
+        r = await asyncio.to_thread(bt_engine.run, symbol, candles, fg)
+    except Exception as e:
+        log.exception("backtest failed")
+        await reply(update, f"Не удалось: {escape(str(e))}")
+        return
+    await reply(update, (
+        f"<b>Бэктест сигналов {escape(symbol)}</b> (без новостного фактора — архива новостей нет)\n"
+        f"<pre>{escape(bt_report.coin_report(r, 15, -15))}</pre>\n"
+        "<i>Прошлые результаты не гарантируют будущих.</i>"
+    ))
+
+
 # --- подписки ---
 
 def load_subscribers() -> set[int]:
@@ -179,6 +201,7 @@ def main() -> None:
     app.add_handler(CommandHandler("market", market_cmd))
     app.add_handler(CommandHandler("trending", trending_cmd))
     app.add_handler(CommandHandler("news", news_cmd))
+    app.add_handler(CommandHandler("backtest", backtest_cmd))
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
     app.job_queue.run_daily(daily_digest, time=dt.time(hour=config.DIGEST_HOUR_UTC, tzinfo=dt.timezone.utc))
