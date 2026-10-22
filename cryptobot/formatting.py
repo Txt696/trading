@@ -15,6 +15,10 @@ EMOJI = {
     "АКТИВНО ПРОДАВАТЬ": "🔴🔴",
 }
 
+IMPACT_MARK = {"positive": "📈", "negative": "📉", "neutral": "▫️"}
+
+MOOD_RU = {"bullish": "🟢 бычий", "bearish": "🔴 медвежий", "neutral": "⚪️ нейтральный", "mixed": "🟡 смешанный"}
+
 SIGNAL_NAMES = {
     "trend": "Тренд",
     "momentum": "Импульс",
@@ -62,10 +66,12 @@ def full_report(a: Analysis) -> str:
     ]
     if a.score >= 15:
         lines.append(f"Ориентир стоп-лосса: {price(r['stop_loss'])} · цели: {price(r['take_profit'])}")
+    if a.news_summary:
+        lines += ["", "<b>🤖 Что пишут в новостях:</b>", escape(a.news_summary)]
     if a.headlines:
-        lines += ["", "<b>Новости:</b>"]
-        lines += [f"• <a href=\"{escape(h['link'])}\">{escape(h['title'])}</a> ({escape(h['source'])})"
-                  for h in a.headlines]
+        lines += ["", "<b>Ключевые новости:</b>" if a.news_summary else "<b>Новости:</b>"]
+        lines += [f"{IMPACT_MARK.get(h.get('impact'), '•')} <a href=\"{escape(h['link'])}\">"
+                  f"{escape(h['title'])}</a> ({escape(h['source'])})" for h in a.headlines]
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
@@ -87,4 +93,19 @@ def ranking(results: list[Analysis], title: str) -> str:
     lines.append("<b>Кандидаты на продажу:</b> " + (", ".join(a.symbol for a in sells[::-1][:3]) or "нет явных сигналов"))
     lines.append("\nПодробно по монете: /analyze BTC")
     lines.append(DISCLAIMER)
+    return "\n".join(lines)
+
+
+def market_brief(b) -> str:
+    lines = [
+        "<b>🤖 ИИ-сводка новостей</b>",
+        f"Настроение: {MOOD_RU[b.mood]}",
+        "",
+        escape(b.summary),
+        "",
+        "<b>Главные темы:</b>",
+    ]
+    lines += [f"• {escape(t)}" for t in b.themes]
+    if b.watch:
+        lines += ["", "<b>Под наблюдением:</b> " + ", ".join(escape(w) for w in b.watch)]
     return "\n".join(lines)

@@ -44,6 +44,7 @@ class Analysis:
     risk: dict = field(default_factory=dict)
     headlines: list[dict] = field(default_factory=list)
     news_sources: list[str] = field(default_factory=list)
+    news_summary: str | None = None
 
 
 def _clamp(x: float) -> float:
@@ -120,9 +121,20 @@ def volume_signal(prices: list[float], volumes: list[float]) -> Signal | None:
     return Signal("volume", 0.0, "объём на среднем уровне")
 
 
+IMPACT_SCALE = {"low": 0.4, "medium": 0.75, "high": 1.0}
+IMPACT_RU = {"low": "слабое", "medium": "среднее", "high": "сильное"}
+
+
 def news_signal(coin_news: dict) -> Signal:
     if coin_news["count"] == 0:
         return Signal("news", 0.0, "свежих новостей не найдено")
+    v = coin_news.get("ai")
+    if v is not None:
+        score = _clamp(v.sentiment * IMPACT_SCALE[v.impact])
+        mood = "позитивный" if score > 0.15 else "негативный" if score < -0.15 else "нейтральный"
+        return Signal("news", score,
+                      f"ИИ: фон {mood}, влияние {IMPACT_RU[v.impact]} "
+                      f"({v.relevant_count} из {coin_news['count']} новостей по делу)")
     s = coin_news["score"]
     mood = "позитивный" if s > 0.15 else "негативный" if s < -0.15 else "нейтральный"
     return Signal("news", _clamp(s * 1.5), f"{coin_news['count']} новостей, фон {mood}")
@@ -218,9 +230,23 @@ async def analyze(coin_id: str, market: dict | None = None) -> Analysis:
         confidence=confidence(signals, score),
         signals=signals,
         risk=risk,
-        headlines=sorted(cn["items"], key=lambda n: -abs(n["sentiment"]))[:3],
+        headlines=_headlines(cn),
         news_sources=cn["sources"],
+        news_summary=cn["ai"].summary if cn["ai"] else None,
     )
+
+
+def _headlines(cn: dict) -> list[dict]:
+    """Ключевые события от ИИ, а без него — новости с самой яркой тональностью."""
+    items = cn["items"]
+    if cn["ai"]:
+        picked = []
+        for e in cn["ai"].key_events:
+            if 0 <= e.index < len(items):
+                picked.append({**items[e.index], "title": e.title, "impact": e.impact})
+        if picked:
+            return picked[:3]
+    return sorted(items, key=lambda n: -abs(n["sentiment"]))[:3]
 
 
 async def analyze_many(coin_ids: list[str]) -> list[Analysis]:

@@ -1,9 +1,11 @@
 """Новости из RSS-лент крипто-СМИ и простой анализ их тональности."""
 import asyncio
+import json
 import re
 
 import feedparser
 
+from .. import ai
 from ..cache import async_ttl_cache
 from .http import get_text
 
@@ -60,16 +62,35 @@ def _mentions(item: dict, keywords: list[str]) -> bool:
 
 
 async def coin_news(name: str, symbol: str) -> dict:
-    """Новости по монете и их суммарная тональность от -1 до 1."""
+    """Новости по монете и их тональность от -1 до 1.
+
+    Если подключён Claude, оценку даёт он; иначе — подсчёт позитивных и негативных слов.
+    """
     keywords = [name, symbol] if len(symbol) > 2 else [name]
     items = [n for n in await all_news() if _mentions(n, keywords)]
     scores = [sentiment(f"{n['title']} {n['summary']}") for n in items]
     for n, s in zip(items, scores):
         n["sentiment"] = s
     signed = [max(-1, min(1, s)) for s in scores]
-    return {
+    result = {
         "items": items,
         "score": sum(signed) / len(signed) if signed else 0.0,
         "count": len(items),
         "sources": sorted({n["source"] for n in items}),
+        "ai": None,
     }
+    verdict = await ai.analyze_coin_news(name, symbol, json.dumps(items[:ai.MAX_ITEMS], ensure_ascii=False))
+    if verdict:
+        result["ai"] = verdict
+        result["score"] = verdict.sentiment
+    return result
+
+
+async def market_brief() -> "ai.MarketNewsBrief | None":
+    items = await all_news()
+    # Берём поровну из каждого источника, чтобы сводка не зависела от одной редакции.
+    by_source: dict[str, list[dict]] = {}
+    for n in items:
+        by_source.setdefault(n["source"], []).append(n)
+    mixed = [n for group in zip(*by_source.values()) for n in group] if by_source else []
+    return await ai.market_brief(json.dumps(mixed[:ai.MAX_ITEMS], ensure_ascii=False))

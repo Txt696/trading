@@ -7,9 +7,9 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from . import config
+from . import ai, config
 from .analyzer import analyze, analyze_many
-from .formatting import DISCLAIMER, full_report, pct, price, ranking
+from .formatting import DISCLAIMER, full_report, market_brief, pct, price, ranking
 from .sources import coingecko, fear_greed, news
 
 log = logging.getLogger(__name__)
@@ -18,12 +18,12 @@ HELP = (
     "<b>Крипто-аналитик</b>\n\n"
     "Я собираю данные из CoinGecko, индекса страха и жадности и новостных лент "
     "(CoinDesk, Cointelegraph, Decrypt, The Block, Bitcoin Magazine), считаю технические "
-    "индикаторы и выдаю сигнал по монете.\n\n"
+    "индикаторы и выдаю сигнал по монете. Новости анализирует ИИ (Claude), если подключён ключ.\n\n"
     "/analyze <code>BTC</code> — подробный анализ монеты\n"
     "/top — рейтинг монет из списка наблюдения\n"
     "/market — общее состояние рынка\n"
     "/trending — что сейчас в тренде\n"
-    "/news — свежие заголовки\n"
+    "/news — ИИ-сводка и свежие заголовки\n"
     "/subscribe — ежедневная сводка\n"
     "/unsubscribe — отписаться\n"
     + DISCLAIMER
@@ -105,24 +105,24 @@ async def trending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.chat.send_action("typing")
     items = await news.all_news()
     if not items:
         await reply(update, "Новостные ленты недоступны.")
         return
-    lines = ["<b>Свежие новости</b>", ""]
-    seen = set()
+    parts = []
+    brief = await news.market_brief()
+    if brief:
+        parts.append(market_brief(brief))
+    # По два свежих заголовка из каждого источника.
+    by_source: dict[str, list[dict]] = {}
     for n in items:
-        if n["source"] in seen:
-            continue
-        seen.add(n["source"])
-        lines.append(f"• <a href=\"{escape(n['link'])}\">{escape(n['title'])}</a> ({escape(n['source'])})")
-    for n in items:
-        if len(lines) >= 12:
-            break
-        line = f"• <a href=\"{escape(n['link'])}\">{escape(n['title'])}</a> ({escape(n['source'])})"
-        if line not in lines:
-            lines.append(line)
-    await reply(update, "\n".join(lines))
+        by_source.setdefault(n["source"], []).append(n)
+    lines = ["<b>Свежие новости</b>"]
+    lines += [f"• <a href=\"{escape(n['link'])}\">{escape(n['title'])}</a> ({escape(n['source'])})"
+              for group in by_source.values() for n in group[:2]]
+    parts.append("\n".join(lines))
+    await reply(update, "\n\n".join(parts))
 
 
 # --- подписки ---
@@ -182,7 +182,7 @@ def main() -> None:
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
     app.job_queue.run_daily(daily_digest, time=dt.time(hour=config.DIGEST_HOUR_UTC, tzinfo=dt.timezone.utc))
-    log.info("Бот запущен")
+    log.info("Бот запущен, ИИ-анализ новостей: %s", "включён" if ai.enabled() else "выключен")
     app.run_polling()
 
 
