@@ -1,6 +1,6 @@
 from html import escape
 
-from .analyzer import Analysis
+from .analyzer import BEAR_VERDICT, Analysis
 
 DISCLAIMER = (
     "\n<i>⚠️ Это не финансовый совет. Сигналы основаны на индикаторах и новостях "
@@ -13,6 +13,7 @@ EMOJI = {
     "ДЕРЖАТЬ / ЖДАТЬ": "⚪️",
     "ПРОДАВАТЬ": "🔴",
     "АКТИВНО ПРОДАВАТЬ": "🔴🔴",
+    BEAR_VERDICT: "🐻",
 }
 
 IMPACT_MARK = {"positive": "📈", "negative": "📉", "neutral": "▫️"}
@@ -46,6 +47,16 @@ def bar(score: float) -> str:
     return "🟩" if score > 0.2 else "🟥" if score < -0.2 else "⬜️"
 
 
+def regime_line(r: dict | None) -> str | None:
+    if not r:
+        return None
+    if r["bullish"]:
+        return (f"🐂 Фильтр рынка: BTC выше {r['days']}-дневной средней ({price(r['sma'])}, "
+                f"{r['distance']:+.0%}) — покупки разрешены")
+    return (f"🐻 Фильтр рынка: BTC ниже {r['days']}-дневной средней ({price(r['sma'])}, "
+            f"{r['distance']:+.0%}) — рынок медвежий, покупать не стоит, открытые позиции лучше закрыть")
+
+
 def full_report(a: Analysis) -> str:
     lines = [
         f"<b>{escape(a.name)} ({a.symbol})</b>" + (f" · #{a.market_cap_rank}" if a.market_cap_rank else ""),
@@ -54,6 +65,10 @@ def full_report(a: Analysis) -> str:
         "",
         f"{EMOJI[a.verdict]} <b>{a.verdict}</b>",
         f"Оценка: <b>{a.score:+.0f}</b> из ±100 · уверенность: {a.confidence}",
+    ]
+    if line := regime_line(a.regime):
+        lines.append(escape(line))
+    lines += [
         "",
         "<b>Факторы:</b>",
     ]
@@ -84,12 +99,16 @@ def short_line(a: Analysis) -> str:
 def ranking(results: list[Analysis], title: str) -> str:
     if not results:
         return "Не удалось получить данные, попробуйте позже."
-    buys = [a for a in results if a.score >= 15]
-    sells = [a for a in results if a.score <= -15]
+    buys = [a for a in results if "ПОКУП" in a.verdict]
+    sells = [a for a in results if "ПРОДАВ" in a.verdict]
     lines = [f"<b>{title}</b>", ""]
+    if line := regime_line(results[0].regime):
+        lines += [escape(line), ""]
     lines += [short_line(a) for a in results]
     lines.append("")
-    lines.append("<b>Лучшие для покупки:</b> " + (", ".join(a.symbol for a in buys[:3]) or "нет явных сигналов"))
+    lines.append("<b>Лучшие для покупки:</b> " + (", ".join(a.symbol for a in buys[:3])
+                   or ("нет — рынок медвежий" if results[0].regime and not results[0].regime["bullish"]
+                       else "нет явных сигналов")))
     lines.append("<b>Кандидаты на продажу:</b> " + (", ".join(a.symbol for a in sells[::-1][:3]) or "нет явных сигналов"))
     lines.append("\nПодробно по монете: /analyze BTC")
     lines.append(DISCLAIMER)

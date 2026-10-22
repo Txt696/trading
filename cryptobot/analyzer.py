@@ -4,10 +4,18 @@
 Сумма нормируется в шкалу от -100 до +100.
 """
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from . import indicators as ind
+from .config import BTC_FILTER_DAYS
 from .sources import coingecko, fear_greed, news
+
+log = logging.getLogger(__name__)
+
+# Вердикт, когда BTC ниже своей долгосрочной средней. В бэктесте выход из всех монет
+# в такие периоды заметно снижал просадки (python -m cryptobot.backtest --btc-filter 200).
+BEAR_VERDICT = "ВНЕ РЫНКА"
 
 WEIGHTS = {
     "trend": 25,      # положение цены относительно EMA20/EMA50/SMA100
@@ -45,6 +53,7 @@ class Analysis:
     headlines: list[dict] = field(default_factory=list)
     news_sources: list[str] = field(default_factory=list)
     news_summary: str | None = None
+    regime: dict | None = None
 
 
 def _clamp(x: float) -> float:
@@ -181,6 +190,29 @@ def verdict(score: float) -> str:
     return "АКТИВНО ПРОДАВАТЬ"
 
 
+def apply_regime(v: str, regime: dict | None) -> str:
+    """В медвежьем режиме покупки запрещены: «покупать» и «держать» превращаются в «вне рынка»."""
+    if regime and not regime["bullish"] and "ПРОДАВ" not in v:
+        return BEAR_VERDICT
+    return v
+
+
+async def btc_regime() -> dict | None:
+    """Фильтр рынка: выше ли BTC своей BTC_FILTER_DAYS-дневной средней."""
+    if BTC_FILTER_DAYS <= 0:
+        return None
+    try:
+        prices = (await coingecko.history("bitcoin", days=365))["prices"]
+    except Exception:
+        log.warning("BTC regime unavailable", exc_info=True)
+        return None
+    sma = ind.sma(prices, BTC_FILTER_DAYS)
+    if sma is None:
+        return None
+    return {"bullish": prices[-1] > sma, "price": prices[-1], "sma": sma,
+            "distance": prices[-1] / sma - 1, "days": BTC_FILTER_DAYS}
+
+
 def confidence(signals: list[Signal], score: float) -> str:
     """Уверенность — насколько факторы согласны с итоговым направлением."""
     directional = [s for s in signals if abs(s.score) > 0.1]
@@ -191,9 +223,10 @@ def confidence(signals: list[Signal], score: float) -> str:
 
 
 async def analyze(coin_id: str, market: dict | None = None) -> Analysis:
-    hist, fg, mkts = await asyncio.gather(
+    hist, fg, regime, mkts = await asyncio.gather(
         coingecko.history(coin_id),
         fear_greed.fear_greed(),
+        btc_regime(),
         coingecko.markets((coin_id,)) if market is None else asyncio.sleep(0, [market]),
     )
     if not mkts:
@@ -231,13 +264,14 @@ async def analyze(coin_id: str, market: dict | None = None) -> Analysis:
         change_30d=m.get("price_change_percentage_30d_in_currency"),
         market_cap_rank=m.get("market_cap_rank"),
         score=score,
-        verdict=verdict(score),
+        verdict=apply_regime(verdict(score), regime),
         confidence=confidence(signals, score),
         signals=signals,
         risk=risk,
         headlines=_headlines(cn),
         news_sources=cn["sources"],
         news_summary=cn["ai"].summary if cn["ai"] else None,
+        regime=regime,
     )
 
 

@@ -45,3 +45,13 @@ def test_combine_and_verdict():
 def test_news_sentiment():
     assert sentiment("Bitcoin surges to record high on ETF inflows") > 0
     assert sentiment("Exchange hacked, token plunges amid lawsuit") < 0
+
+
+def test_bear_regime_blocks_buys_but_keeps_sells():
+    from cryptobot.analyzer import BEAR_VERDICT, apply_regime
+    bear, bull = {"bullish": False}, {"bullish": True}
+    assert apply_regime("ПОКУПАТЬ", bear) == BEAR_VERDICT
+    assert apply_regime("ДЕРЖАТЬ / ЖДАТЬ", bear) == BEAR_VERDICT
+    assert apply_regime("ПРОДАВАТЬ", bear) == "ПРОДАВАТЬ"
+    assert apply_regime("ПОКУПАТЬ", bull) == "ПОКУПАТЬ"
+    assert apply_regime("ПОКУПАТЬ", None) == "ПОКУПАТЬ"

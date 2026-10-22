@@ -9,9 +9,9 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from . import ai, config
-from .analyzer import analyze, analyze_many
+from .analyzer import analyze, analyze_many, btc_regime
 from .backtest import data as bt_data, engine as bt_engine, report as bt_report
-from .formatting import DISCLAIMER, full_report, market_brief, pct, price, ranking
+from .formatting import DISCLAIMER, full_report, market_brief, pct, price, ranking, regime_line
 from .sources import coingecko, fear_greed, news
 
 log = logging.getLogger(__name__)
@@ -79,6 +79,8 @@ async def market_text() -> str:
     ]
     if fg:
         lines.append(f"Страх и жадность: {fg['value']} ({fg['label']}), среднее за неделю {fg['week_avg']:.0f}")
+    if line := regime_line(await btc_regime()):
+        lines.append(escape(line))
     return "\n".join(lines)
 
 
